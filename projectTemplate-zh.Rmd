@@ -1,0 +1,1028 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+Prosper Loan Exploration by Zhang Lijuan
+========================================================
+### 该数据集包括了2005-11到2014-03期间113,937 项贷款，每项贷款有 81 个变量。
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# 加载你最终使用的所有组件
+# 在这个代码块的分析中。
+# 注意，在这个代码块中，将参数 "echo" 设为假。
+# This prevents the code from displaying in the knitted HTML output.这可以避免代码混入 HTML 输出显示。
+# 应当在文件中，对所有代码块设为 echo=FALSE 。
+#install.packages("ggplot2", dependencies = T) 
+#install.packages("knitr", dependencies = T)
+#install.packages("dplyr", dependencies = T)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(dplyr)
+library(GGally)
+library(knitr)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# 加载数据
+pl <- read.csv("prosperLoanData.csv")
+dim(pl)
+str(pl)
+summary(pl)
+
+# 提取感兴趣变量，组成新的待研究数据集
+myvars <- c("LoanOriginationDate", 
+            "CreditGrade", 
+            "Term", 
+            "LoanStatus", 
+            "BorrowerRate",    
+            "ProsperRating..Alpha.",
+            "ProsperScore",
+            "ListingCategory..numeric.", 
+            "BorrowerState", 
+            "EmploymentStatus",
+            "EmploymentStatusDuration",
+            "IsBorrowerHomeowner",
+            "TotalCreditLinespast7years",
+            "BankcardUtilization",
+            "DebtToIncomeRatio",
+            "IncomeRange")
+pl.sub <- pl[myvars]
+
+# 将LoanOriginationDate 数据类型从factor转换为datetime
+pl.sub$LoanOriginationDate <- strptime(x = as.character(pl.sub$LoanOriginationDate),
+                                       format = "%Y-%m-%d %H:%M:%S")
+
+pl.sub$LoanOriginationDate <- as.POSIXct(pl.sub$LoanOriginationDate,
+                                         format = "%Y-%m-%d %H:%M:%S")
+
+# 将Term数据类型从int转换为factor
+unique(pl.sub$Term)  #12,36,60
+pl.sub$Term <- ordered(pl.sub$Term, levels = c(12,36,60))
+table(pl.sub$Term)
+ 
+# 创建新列ListingCategory,明确贷款分类名称
+pl.sub$ListingCategory <- factor(pl.sub$ListingCategory..numeric.,
+                                levels = c(1:20),
+                                labels = c( 'Debt Consolidation',
+                                            'Home Improvement',
+                                            'Business',
+                                            'Personal Loan',
+                                            'Student Use',
+                                            'Auto',
+                                            'Other',
+                                            'Baby&Adoption',
+                                            'Boat',
+                                            'Cosmetic Procedure',
+                                            'Engagement Ring',
+                                            'Green Loans',
+                                            'Household Expenses',
+                                            'Large Purchases',
+                                            'Medical/Dental',
+                                            'Motorcycle',
+                                            'RV',
+                                            'Taxes',
+                                            'Vacation',
+                                            'Wedding Loans'))
+
+# 将变量'BorrowerState'中""值设为NA,将'EmploymentStatus'中""归类到"Not available"的level
+pl.sub$BorrowerState[pl.sub$BorrowerState == ""] = NA  
+levels(pl.sub$EmploymentStatus)[levels(pl.sub$EmploymentStatus) == ""] = "Not available"
+
+# 将factor变量'CreditGrade','ProsperRating..Alpha.','IncomeRange'变成有序factor
+pl.sub$CreditGrade <- ordered(pl.sub$CreditGrade,
+                              levels = c('AA','A','B','C','D','E','HR','NC'))
+pl.sub$ProsperRating..Alpha. <- ordered(pl.sub$ProsperRating..Alpha.,
+                                        levels = c('AA','A','B','C','D','E','HR'))
+pl.sub$IncomeRange <- ordered(pl.sub$IncomeRange,
+                              levels = c("Not displayed",
+                                         "Not employed",
+                                         "$0",
+                                         "$1-24,999",
+                                         "$25,000-49,999",
+                                         "$50,000-74,999",
+                                         "$75,000-99,999",
+                                         "$100,000+")) 
+# 因为数据集中各贷款状态（LoanStatus）的样本数量悬殊较大，同时参考Proper对各贷款状态的说明（Past Due四个月后才进入Chargedoff状态），我将原先的12种状态划分为重点研究的是三种状态，即完成（包括Completed和FinalPaymentInProgress）、未完成（包括Defaulted和Chargedoff）和正在完成（包括Current和各种Past Due）,分别标记为"Completed"，"Current"和"Defaulted"。另外取消（Cancelled）状态只有5个样本，直接删除该等级。
+table(pl.sub$LoanStatus)
+bool1 <- levels(pl.sub$LoanStatus) == "FinalPaymentInProgress"
+bool2 <- levels(pl.sub$LoanStatus) == "Chargedoff"
+bool3 <- levels(pl.sub$LoanStatus) == "Past Due (1-15 days)"
+bool4 <- levels(pl.sub$LoanStatus) == "Past Due (16-30 days)"
+bool5 <- levels(pl.sub$LoanStatus) == "Past Due (31-60 days)"
+bool6 <- levels(pl.sub$LoanStatus) == "Past Due (61-90 days)"
+bool7 <- levels(pl.sub$LoanStatus) == "Past Due (91-120 days)"
+bool8 <- levels(pl.sub$LoanStatus) == "Past Due (>120 days)"
+
+levels(pl.sub$LoanStatus)[bool1] = "Completed"
+levels(pl.sub$LoanStatus)[bool2] = "Defaulted"
+levels(pl.sub$LoanStatus)[bool3] = "Current"
+levels(pl.sub$LoanStatus)[bool4] = "Current"
+levels(pl.sub$LoanStatus)[bool5] = "Current"
+levels(pl.sub$LoanStatus)[bool6] = "Current"
+levels(pl.sub$LoanStatus)[bool7] = "Current"
+levels(pl.sub$LoanStatus)[bool8] = "Current"
+
+# 删除贷款状态"Cancelled"
+pl.sub <- pl.sub[pl.sub$LoanStatus != "Cancelled",]
+pl.sub$LoanStatus <- factor(pl.sub$LoanStatus)
+
+# 我们主要想研究什么因素影响客户群体按时还清贷款"Completed"还是拖欠贷款"Defaulted"？,而对于处在还款状态中的客户群，未来的还款结果未知，所以不在我们考虑范围之内，予以去除。同时将"Completed"状态标记为"1"，将"Defaulted"状态标记为"0"。
+
+pl.sub <- subset(pl.sub, LoanStatus != "Current")
+pl.sub$LoanStatus <- ifelse(pl.sub$LoanStatus == "Completed", 1 , 0)
+
+# 将数据集按照贷款生成日期(LoanOriginationDate)以2009年7月1日为节点分成两部分，因为在此日期前后采用的是不同的信用等级机制。2009年7月1日之前采用的是数据集中变量 CreditGrade，自2009年7月1日开始采用Prosper自己的信用评级和评分制度，这是我们研究的一个关键指标，所以一旦涉及信用评分，需要分离数据集分别研究。
+
+# 2009-07-01以前
+pl.pre2009 <- subset(pl.sub, pl.sub$LoanOriginationDate < '2009-07-01') 
+# 2009-07-01以后
+pl.post2009 <- subset(pl.sub, pl.sub$LoanOriginationDate >= '2009-07-01') 
+```
+
+# 单变量绘图选择
+### 绘制LoanOriginationDate直方图
+```{r echo=FALSE, Univariate_Plot1}
+ggplot(aes(x = LoanOriginationDate), data = pl.sub) +
+  geom_histogram(bins = 100)
+```
+
+#### 由直方图可知，2008.11-2009.6间几乎没有网络贷款记录（期间只有2009.5有少量记录），可能是金融危机所致。
+
+### 绘制LoanStatus组成比例柱状图
+```{r echo=FALSE, Univariate_Plot2}
+ggplot(aes(x = LoanStatus, y = ..count.. / sum(..count..)), data = pl.sub) +
+  geom_bar(width = 0.5) 
+```
+
+#### 由柱状图可知，数据集中"Defaulted"客户群占30%多，"Completed"客户群约占70%左右。
+
+### 绘制BorrowerRate直方图
+```{r echo=FALSE, Univariate_Plot3}
+ggplot(aes(x = BorrowerRate), data = pl.sub) +
+  geom_histogram(binwidth = 0.001) 
+```
+
+#### 由上图可发现，利率值集中在0.05-0.35之间，但是在0-0.05以及0.35-0.5之间也有少量可能是异常值的分布。
+
+### 绘制CreditGrade(2009-07-01以前)柱状图
+```{r echo=FALSE, Univariate_Plot4}
+ggplot(aes(x = CreditGrade, y = ..count../sum(..count..)), data = pl.pre2009) +
+  geom_bar() +
+  geom_text(aes(label = paste(round(..count../sum(..count..) * 100, 2), "%")),
+            stat = 'count',vjust = 0,size = 3)
+```
+
+### 绘制ProsperRating(2009-07-01以后)柱状图
+```{r echo=FALSE, Univariate_Plot5}
+ggplot(aes(x = ProsperRating..Alpha.,y = ..count../sum(..count..)), 
+       data = pl.post2009) +
+  geom_bar() +
+  geom_text(aes(label = paste(round(..count../sum(..count..) * 100, 2), "%")),
+            stat = 'count',vjust = 0, size = 3)
+```
+
+#### 由上面两个柱状图的比较我们发现，调整信用等级之前，高等级与低等级客户分布均衡，调整之后，高等级的客户量总体有所降低（前三个等级中只有A级涨了约2.3%，但是"AA"级客户下降了5%以上），后三个低等级的客户量总体有所增加。
+
+### 绘制ProperScore(2009-07-01以后)柱状图
+```{r echo=FALSE, warning=FALSE, Univariate_Plot6}
+ggplot(aes(x = ProsperScore,y = ..count../sum(..count..)), 
+       data = pl.post2009) +
+  geom_bar(width = 0.5) +
+  geom_text(aes(label = paste(round(..count../sum(..count..) * 100, 2), "%")),
+            stat = 'count',vjust = 0)
+```
+
+#### 风险评分总体趋势偏向高分数低风险的方向。
+
+### 绘制ListingCategory柱状图
+```{r echo=FALSE, Univariate_Plot7}
+ggplot(aes(x = reorder(pl.sub$ListingCategory, desc(pl.sub$ListingCategory)), 
+           y = ..count../sum(..count..)), data = pl.sub) +
+  geom_bar(width = 0.5) +
+  xlab("ListingCategory") +
+  geom_text(aes(label = paste(round(..count.. / sum(..count..) * 100, 2),'%')),
+            stat = "count",hjust = -0.1,size = 3) +
+  coord_flip() 
+```
+
+#### 可以发现贷款类别30%无记录，在有记录的70%中，排名先后依次是债务合并、其它，商务，家庭改善等。
+
+### 绘制BorrowerState柱状图
+```{r echo=FALSE, Univariate_Plot8}
+ggplot(aes(x = reorder(pl.sub$BorrowerState, desc(pl.sub$BorrowerState)), 
+           y = ..count../sum(..count..)), data = pl.sub) +
+  geom_bar(width = 0.5) +
+  xlab("BorrowerState") +
+  geom_text(aes(label = paste(round(..count.. / sum(..count..) * 100, 2),'%')),
+            stat = "count",hjust = -0.1,size = 2.5) +
+  coord_flip() 
+```
+
+#### 可以发现贷款人所在州10%无记录，在有记录的90%中，排名先后依次是"CA","FL","IL","GA","TX","NY"，除第一个占比13%以上外，其余几个州的贷款占比均在5%左右。
+
+### 绘制EmploymentStatus柱状图
+```{r echo=FALSE, Univariate_Plot9}
+ggplot(aes( x = EmploymentStatus, y = ..count../sum( ..count..)), 
+       data = pl.sub ) +
+  geom_bar( width = 0.5) +
+  geom_text( aes(label = paste(round( ..count../sum( ..count..) * 100, 2),'%')),
+             stat = "count", vjust = 0)
+```
+
+#### 几乎一半的贷款客户是全职工作状态，30%左右是雇佣状态。说明没有稳定的还款来源，不太可能申请到贷款。
+
+### 绘制EmploymentStatusDuration直方图
+```{r echo=FALSE, warning=FALSE, Univariate_Plot10}
+ggplot(aes(x = EmploymentStatusDuration ), data = pl.sub) +
+  geom_histogram(binwidth = 5) +
+  xlim(0, quantile(pl.sub$EmploymentStatusDuration, 0.999, na.rm = TRUE)) 
+```
+
+#### 贷款大多数发生在雇佣状态持续时间较短的时候，少部分发生在雇佣状态持续时间长的情况下。
+
+### 绘制IsBorrowerHomeowner柱状图
+```{r echo=FALSE, Univariate_Plot11}
+ggplot(aes(x = IsBorrowerHomeowner, y = ..count../sum(..count..)), 
+       data = pl.sub) +
+  geom_bar(width = 0.5,position = position_dodge()) +
+  geom_text(aes(label = paste0(round(..count.. / sum(..count..) * 100, 1),"%")),
+              stat = "count",vjust = 5,size = 10)
+``` 
+
+
+### 绘制TotalCreditLinespast7years直方图
+```{r echo=FALSE, warning=FALSE, Univariate_Plot12}
+summary(pl.sub$TotalCreditLinespast7years)
+ggplot(aes(x = TotalCreditLinespast7years), data = pl.sub) +
+  geom_histogram(binwidth = 1) 
+```
+
+#### 绝大部分数值在0-50间，均值是25.28，中位数是23，少量可能异常值分布在100以上。
+
+### 绘制BankcardUtilization直方图
+```{r echo=FALSE, Univariate_Plot13}
+summary(pl.sub$BankcardUtilization)
+ggplot(aes(x = BankcardUtilization), 
+       data = subset(pl.sub,BankcardUtilization != 0)) +
+  geom_histogram(binwidth = 0.01,color = 'black', fill = '#66FFFF') 
+```
+
+#### 已使用额度与总额度的比例绝大部分值在0-1.5之间，但是发现1.5-6间有可能是异常值的分布，其中比例越接近1，人数越多。
+
+### 绘制DebtToIncomeRatio直方图
+```{r echo=FALSE, message=FALSE, warning=FALSE, Univariate_Plot14}
+summary(pl.sub$DebtToIncomeRatio)
+ggplot(aes(x = DebtToIncomeRatio), data = pl.sub) +
+  geom_histogram(binwidth = 0.01) +
+  xlim(0,1)
+```
+
+#### 债务与收入比例大部分集中在0-1间，但是有少量有可能是异常值分布在1.5-10。
+
+### 绘制IncomeRange柱状图
+```{r echo=FALSE, Univariate_Plot15}
+ggplot(aes(x = IncomeRange, y = ..count../sum(..count..)), data = pl.sub) +
+  geom_bar(width = 0.5,position = position_dodge()) +
+  geom_text(aes(label = paste0(round(..count../sum(..count..) * 100, 1),"%")),
+              stat = "count",vjust = 0) +
+  theme(axis.text.x = element_text(angle = 45))
+```
+
+#### 贷款人收入范围以中等收入为主，例如收入范围"$25,000-49,999"（约30%）和 "$50,000-74,999"(约23%)。高收入人群"$75,000-99,999"和"$100,000+"（比例各占约11%），高于低收入人群"$1-24,999"(约8%)以及无收入人群"$0"和"Not employed"(各占约1%)。
+
+# 单变量分析
+
+### 你的数据集结构是什么？
+原始数据集结构较整洁，每条观察结果为一行，每个观察特性为一列。但是考虑到变量众多，重点提取以下变量组成新的待研究的数据集pl.sub：
+LoanOriginationDate
+CreditGrade
+Term
+LoanStatus
+BorrowerRate
+ProsperRating..Alpha.
+ProsperScore
+ListingCategory
+BorrowerState
+Occupation
+EmploymentStatus
+EmploymentStatusDuration
+IsBorrowerHomeowner
+TotalCreditLinespast7years
+BankcardUtilization
+DebtToIncomeRatio
+IncomeRange
+### 你的数据集内感兴趣的主要特性有哪些？
+我感兴趣的主要特性是贷款状态LoanStatus，我很想知道哪些因素会影响借贷状态"Completed"和"Defaulted"？
+### 你认为数据集内哪些其他特征可以帮助你探索兴趣特点？
+首先是借贷人员的人身特性，例如就业状态及时长（EmploymentStatus/EmploymentStatusDuration），债务与收入比例（DebtToIncomeRatio），收入范围（IncomeRange），是否有房子（IsBorrowerHomeowner），居住在哪个州（BorrowerState）等，其次是借贷人的行为特性，比如信用等级及评分（CreditGrade/ProsperRating/ProsperScore），借贷原因（ListingCategory），过去7年信用额度情况（TotalCreditLinespast7years），银行卡使用情况（BankcardUtilization）等，最后是一些贷款特性，例如贷款期限（Term），贷款利率（BorrowerRate）。上述提及的变量都可以帮助我探索兴趣点。
+
+### 根据数据集内已有变量，你是否创建了任何新变量？
+创建新列ListingCategory，将ListingCategory..numeric.中用数字代替的分类文字化,图形展示时一目了然。
+
+### 在已经探究的特性中，是否存在任何异常分布？你是否对数据进行一些操作，如清洁、调整或改变数据的形式？如果是，你为什么会这样做？
+可能的异常分布：
+1.网络贷款生成日期异常分布（LoanOriginationDate）
+  2008.11-2009.6间几乎没有网络贷款记录（期间只有2009.5有少量记录），可能是金融危机所致；
+2.贷款利率分布异常（BorrowerRate）
+  利率值集中在0.05-0.35之间，但是在0-0.05以及0.35-0.5之间也有少量值分布；
+3.贷款人过去7年总信用额度（TotalCreditLinespast7years）可能有异常值
+  绝大部分数值在0-50间，均值是25.28，中位数是23，少量可能异常值分布在100以上；
+4.银行卡使用率（BankcardUtilization）可能有异常值
+  已使用额度与总额度的比例不太可能远远大于1，所以大部分值在0-1.5之间，但是发现1.5-6间也有分布；
+5.债务与收入比例（DebtToIncomeRatio）可能有异常值
+  债务与收入比例大部分集中在0-1间，但是有少量有可能是异常值分布在1.5-10；
+  
+对如下变量进行了调整：
+1.LoanOriginationDate，从factor转换为datetime，因为这个变量本身就是日期属性，转换后便于后期分析；
+2.Term，从int转换为factor，因为这个变量本身只包含三类值，转换后便于按照分类变量处理；
+3.将变量'BorrowerState','EmploymentStatus'中""值设为NA，因为这2个变量都是factor，对于值   为""的元素无法进行补充，所以采取视为空值的处理方法；
+4.将factor变量'CreditGrade','ProsperRating..Alpha.','IncomeRange'变成有序factor，这样做可以优化图标界面，有顺序感利于比较；
+5.因为数据集中各贷款状态（LoanStatus）的样本数量悬殊较大，同时参考Proper对各贷款状态的说明（Past Due四个月后才进入Chargedoff状态），我将原先的12种状态划分为三种状态，即完成（包括Completed和FinalPaymentInProgress）、未完成（包括Defaulted和Chargedoff）和正在完成（包括Current和各种Past Due）,分别标记为"Completed"，"Current"和"Defaulted"。另外，我们主要想研究什么因素影响客户群体按时还清贷款"Completed"还是拖欠贷款"Defaulted"？,而对于处在还款状态中的客户群，未来的还款结果未知，所以不在我们考虑范围之内，予以去除。同时将"Completed"状态标记为"1"，将"Defaulted"状态标记为"0"。最后，取消（Cancelled）状态只有5个样本，直接删除该等级。
+
+创建了两个数据子集pl.pre2009和pl.post2009：
+将数据集按照贷款生成日期(LoanOriginationDate)以2009年7月1日为节点分成两部分，因为在此日期前后采用的是不同的信用等级机制。2009年7月1日之前采用的是数据集中变量 CreditGrade，自2009年7月1日开始采用Prosper自己的信用评级和评分制度，这是我们研究的一个关键指标，所以一旦涉及信用评分，需要分离数据集分别研究。
+
+
+# 双变量绘图选择
+### LoanStatus v.s. BorrowerRate 
+```{r echo=FALSE, Bivariate_Plot1}
+# 箱线图
+p.sub.br1 <- ggplot(aes(x = factor(LoanStatus),y = BorrowerRate),
+                    data = pl.sub) +
+  geom_boxplot() 
+# 将BorrowerRate分成5个区间
+summary(pl.sub$BorrowerRate)
+pl.sub$BorrowerRate.bucket <- cut(pl.sub$BorrowerRate,
+                                  breaks = c(0,0.14,0.19,0.27,0.5))
+# 创建子集，获取每个贷款利率段违约率情况
+pl.sub.br <- aggregate(pl.sub[,c("BorrowerRate.bucket","LoanStatus")],
+                       by = list(pl.sub$BorrowerRate.bucket),
+                       FUN = function(x) mean(as.numeric(x))) 
+
+p.sub.br2 <- ggplot(aes(x = Group.1,y = 1 - LoanStatus),data = pl.sub.br) +
+  geom_col(width = 0.75) +
+  geom_line(aes(group = 1),lty = 2,lwd = 1.5) 
+
+grid.arrange(p.sub.br1,p.sub.br2,ncol = 1)
+```
+
+#### 'Defaulted'状态的贷款利率数值分布明显大于 'Completed'状态，随着贷款利率增加，违约率逐渐增大。
+
+### LoanStatus v.s. Term
+```{r echo=FALSE, Bivariate_Plot2}
+spineplot(pl.sub$LoanStatus,pl.sub$Term)  
+# 创建子数据集，分别得到三个Term下Completed和Defaulted客户总数
+pl.sub.term <- pl.sub %>% select(Term,LoanStatus) %>% 
+  group_by(Term,LoanStatus) %>%
+  summarise(count = n())
+# 计算三个Term下的客户总数
+total = pl.sub.term[pl.sub.term$LoanStatus == 0,]$count + 
+  pl.sub.term[pl.sub.term$LoanStatus == 1,]$count
+# 计算三个Term下的违约率（完成率）
+pl.sub.term$rate = NA
+
+pl.sub.term$rate[which(pl.sub.term$LoanStatus == 0)] <- 
+  subset(pl.sub.term,LoanStatus == 0)$count / total
+
+pl.sub.term$rate[which(pl.sub.term$LoanStatus == 1)] <-
+  subset(pl.sub.term,LoanStatus == 1)$count / total
+
+# 不同Term对贷款完成或者违约的影响
+ggplot(aes(x = Term, y = rate),data = pl.sub.term) +
+  geom_col(aes(fill = factor(-LoanStatus)))
+```
+
+#### 由spine图可知，36个月是两个贷款状态最热衷选择的期限，占比均在90%左右；其次是60个月，12个月是最不受欢迎的期限；而由柱状图可知，不同Term下贷款状态所占比例（违约率或完成率）中，12个月违约率最低，其次是36个月（约31%），60个月违约率最高（约34%）。
+
+### LoanStatus v.s. ProsperRating..Alpha.（ After 2009.7）
+```{r echo=FALSE, Bivariate_Plot3}
+p.post2009.pr0 <- ggplot(aes(x = ProsperRating..Alpha., group = LoanStatus),       
+  data = subset(pl.post2009,!is.na(pl.post2009$ProsperRating..Alpha.))) + 
+  geom_bar(aes(y = ..prop.., fill = ProsperRating..Alpha.), stat = "count") + 
+  scale_y_continuous(labels = scales::percent) +
+  ylab("relative frequencies") +
+  facet_wrap(~LoanStatus) 
+# 创建子数据集，分别得到不同Prosper等级下Completed和Defaulted客户总数
+pl.sub.pr <- pl.sub %>%
+  select(ProsperRating..Alpha.,LoanStatus) %>% 
+  group_by(ProsperRating..Alpha.,LoanStatus) %>%
+  summarise(count = n())    
+# 计算不同Prosper等级下的违约率（完成率）
+pl.sub.pr$rate <- NA
+
+pl.sub.pr$rate[which(pl.sub.pr$LoanStatus == 0)] <- 
+  pl.sub.pr[pl.sub.pr$LoanStatus == 0,]$count / 
+  (pl.sub.pr %>% summarise(total = sum(count)))$total
+
+pl.sub.pr$rate[which(pl.sub.pr$LoanStatus == 1)] <- 
+  pl.sub.pr[pl.sub.pr$LoanStatus == 1,]$count / 
+  (pl.sub.pr %>% summarise(total = sum(count)))$total  
+  
+p.post2009.pr <- ggplot(aes(x = ProsperRating..Alpha., y = rate ), 
+                        data = pl.sub.pr) +
+  geom_col(aes(fill = factor(-LoanStatus))) +
+  scale_fill_manual(values = c("#999999","#E69F00")) +
+  theme(legend.position = 'top',legend.title = element_blank()) +
+  ggtitle("After Sep.2009") 
+
+grid.arrange(p.post2009.pr0,p.post2009.pr,ncol = 1)
+```
+
+#### 由柱状图可知，"Defaulted" 状态的贷款中，信用差的占比远远大于信用好的；而"Completed"状态的贷款 中，信用差的占比却小于信用好的。 2009年7月以后，随着信用等级变差，可以明确看到违约率在上涨。 下面我想知道2009.7以前的信用等级与贷款状态是否由相同的规律，它们之间又有什么区别。
+
+### LoanStatus v.s. CreditGrade（Before 2009.7）
+```{r echo=FALSE, Bivariate_Plot4}
+# 创建子集，分别得到不同CreditGrade下Completed和Defaulted客户比例
+pl.sub.cg <- pl.pre2009 %>% 
+  select(CreditGrade,LoanStatus) %>% 
+  count(LoanStatus,CreditGrade)
+
+pl.sub.cg$rate <- pl.sub.cg$n/(pl.pre2009 %>% 
+                                 select(CreditGrade,LoanStatus) %>% 
+                                 count(CreditGrade))$n
+
+p.pre2009.cg <- ggplot(aes(x = CreditGrade, y = rate),data = pl.sub.cg) +
+  geom_col(aes(fill = factor(-LoanStatus))) +
+  scale_fill_manual(values = c("#999999","#E69F00")) +
+  theme(legend.position = 'top',legend.title = element_blank()) +
+  ggtitle("Before Sep.2009") 
+
+grid.arrange(p.post2009.pr, p.pre2009.cg, ncol = 2)
+```
+
+#### 2009年7月以前，违约率（完成率）随信用等级的变化趋势同2009年7月以后的一致。通过对比2009年7月前后违约率与信用等级图表，可以发现二者变化趋势与我们预想的基本一致，即随着信用等级变差，违约率增加，但是2009年7月以后各信用等级违约率明显小于2009年7月以前相应等级的违约率，说明Prosper对客户信用等级标准做了有效的调整，也许提高了标准，从而降低了违约率，这是一个积极的变革。
+
+### LoanStatus v.s. ProsperScore
+```{r echo=FALSE,warning=FALSE, Bivariate_Plot5}
+ggplot(aes(x = factor(LoanStatus),y = ProsperScore),data = pl.post2009) +
+  geom_boxplot() +
+  stat_summary(fun.y = mean,geom = 'point',shape = 6)
+```
+
+#### 由上图可知，"Completed"贷款评分整体分布高于"Defaulted"，因为风险为评分越高，贷款风险越小,显然ProsperScore越低越有可能成为"Defaulted"贷款。下面做进一步探索。
+
+```{r echo=FALSE, Bivariate_Plot6}
+# 创建子集，获取不同ProsperScore的客户群的违约率（完成率）
+pl.sub.ps <- aggregate(pl.post2009[,c("ProsperScore","LoanStatus")],
+                       by = list(pl.post2009$ProsperScore),mean) 
+
+ggplot(aes(x = ProsperScore,y = 1 - LoanStatus),data = pl.sub.ps) +
+  geom_line(color = "#FF0000",lwd = 1.5) +
+  geom_col(width = 0.75)
+```
+
+#### 由上图可知，随着风险评分增加，客户的违约率整体下降，其中评分为1风险最高，违约概率最大，风险评分在2-5时，违约率变化不明显，从6开始显著降低。
+
+### LoanStatus v.s. ListingCategory
+```{r echo=FALSE, Bivariate_Plot7}
+# 创建子集，获取不同贷款分类的客户群的违约率（完成率）
+pl.sub.lc <- aggregate(pl.sub[,c("ListingCategory","LoanStatus")],
+                       by = list(pl.sub$ListingCategory),
+                       FUN = function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = Group.1, y = 1 - LoanStatus),data = pl.sub.lc) +
+  geom_col(width = 0.75) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+#### 由上图可知，"GreenLoans"违约率最高，接下来依次是"Household Expenses","Medical/Demtal", "Business", "Personal Loan","Baby&Adoption",这些贷款类别的违约率均在30%以上；违约率最低的有"RV","Motorcycle","Engagement Ring",违约率均在10%以下。
+
+### LoanStatus v.s. BorrowerState
+```{r echo=FALSE, Bivariate_Plot8}
+# 创建子集，获取不同州客户群的违约率（完成率）
+pl.sub.bs <- aggregate(pl.sub[,c("LoanStatus","BorrowerState")],
+                       by = list(pl.sub$BorrowerState),
+                       FUN = function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = Group.1, y = 1 - LoanStatus),data = pl.sub.bs) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  geom_text(aes(label = paste0(round((1 - LoanStatus) * 100,2),"%")),
+            hjust = 0,size = 3)
+```
+
+#### 由上图可知，"AL"州违约率最高，达到42%以上，接下来是"MO"（约38%）、"GA"和"ME"(均约37%)、"ID"和"IA"（均约36%），其它州违约率均在35%以下，其中有三个州的客户违约率最低都在20%以下，它们分别是"DC"(约16.5%)、"WY"(约17%)、"AK"(约19%)。
+
+### LoanStatus v.s. EmploymentStatus
+```{r echo=FALSE, Bivariate_Plot9}
+pl.sub.es <- aggregate(pl.sub[,c("EmploymentStatus","LoanStatus")], 
+                       by = list(pl.sub$EmploymentStatus),
+                       FUN = function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = Group.1, y = 1 - LoanStatus),data = pl.sub.es) +
+  geom_col(width = 0.65) +
+  geom_text(aes(label = paste0(round((1 - LoanStatus) * 100,1),"%")),
+            vjust = 0,size = 4)
+```
+
+#### 由上图可知，贷款人雇佣状态不明确时（如“Not available",Others"）更容易处于"Defaulted" 状态， 这两 个群体的违约率均高于42%；而"Employed"和"Part-time"的贷款客户更容易完成还款，违约率相对于其它雇佣状态较低，在25%左右。
+
+### LoanStatus v.s. EmploymentStatusDuration
+```{r echo=FALSE, warning=FALSE, Bivariate_Plot10}
+ggplot(aes(x = factor(LoanStatus),y = EmploymentStatusDuration),
+       data = pl.sub) +
+  geom_boxplot() 
+```
+
+#### 由箱线图发现，"Completed"和"Defaulted"群体的EmploymentStatusDuration数据分布十分接近，所以我们大胆推测雇佣时间的长短对违约或完成情况没有太大影响。为了进一步验证，我们将EmploymentStatusDuration按月分区间，以月为研究单位研究雇佣状态持续时间对违约或完成贷款的影响。
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Bivariate_Plot11}
+# 按每个月将EmploymentStatusDuration分成若干区间
+pl.sub$EmploymentStatusDuration.bucket <- cut(pl.sub$EmploymentStatusDuration,
+                                              breaks = seq(0,755,1))
+# 创建子集，获取每个时间段违约率情况
+pl.sub.esd <- aggregate(pl.sub[,c("EmploymentStatusDuration.bucket",
+                                  "LoanStatus")],
+                        by = list(pl.sub$EmploymentStatusDuration.bucket),
+                        function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = EmploymentStatusDuration.bucket, y = 1 - LoanStatus),
+       data = pl.sub.esd) +
+  geom_point() +
+  xlim(0,240) +
+  geom_smooth()
+```
+
+#### 由于某种雇佣状态持续时间越长，贷款人数越少，违约率较发散，同时结合实际情况，我们只研究雇佣状态持续20年及以内的情况后，发现雇佣状态持续时间对贷款的违约或完成没有显著影响。
+
+### LoanStatus v.s. IsBorrowerHomeowner
+```{r echo=FALSE, Bivariate_Plot12}
+spineplot(pl.sub$LoanStatus, pl.sub$IsBorrowerHomeowner)
+```
+
+#### 由上图可知，"Completed"群体中拥有房产的人的比例略高于"Defaulted"群体，但差距不明显，在5%之内。
+
+### LoanStatus v.s. TotalCreditLinespast7years
+```{r echo=FALSE,warning=FALSE,Bivariate_Plot13}
+ggplot(aes(x = factor(LoanStatus), y = TotalCreditLinespast7years), 
+       data = pl.sub) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0,65))
+```
+
+#### 由箱线图发现，"Completed"和"Defaulted"群体的TotalCreditLinespast7years数据分布十分相似，所以我们大胆推测 TotalCreditLinespast7years对违约或完成情况没有太大影响。
+
+### LoanStatus v.s. BankcardUtilization
+```{r echo=FALSE,warning=FALSE,Bivariate_Plot14}
+ggplot(aes(x = factor(LoanStatus), y = BankcardUtilization), 
+       data = pl.sub) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0,2))
+```
+
+#### 由箱线图似乎发现银行卡使用率高的人更可能违约，为了进一步验证，我们将BankcardUtilization分成5个区间探索，分别是(0,0.21],(0.22,0.56],(0.57,0.85],(0.86,5.95],(5.95+)。
+
+```{r echo=FALSE, Bivariate_Plot15}
+pl.sub$BankcardUtilization.bucket <- cut(pl.sub$BankcardUtilization,
+                                         breaks = c(0,0.21,0.56,0.85,5.95))
+# 创建子集，获取不同银行卡透支额度的客户违约率（完成率）
+pl.sub.bu <- aggregate(pl.sub[,c("BankcardUtilization.bucket","LoanStatus")],
+                       by = list(pl.sub$BankcardUtilization.bucket),
+                       FUN = function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = Group.1, y = 1 - LoanStatus),data = pl.sub.bu) +
+  geom_col(width = 0.5) +
+  geom_point(size = 3) +
+  geom_line(aes(group = 1),lwd = 1.5)
+```
+
+#### 和我们预期的一样，随着银行卡透支率的增加，违约率随之上升。当贷款人银行卡透支率高于85%时，进入"Defaulted"贷款状态的概率有35%。*
+
+### LoanStatus v.s. DebtToIncomeRatio
+```{r echo=FALSE,warning=FALSE,Bivariate_Plot16}
+ggplot(aes(x = factor(LoanStatus), y = DebtToIncomeRatio), data = pl.sub) +
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0,0.6))
+```
+
+#### 由箱线图似乎发现债务与收入比例较高的人更可能违约，为了进一步验证，我们将DebtToIncomeRatio分成5个区间探索，分别是(0,0.13],(0.14,0.2],(0.21,0.3],(0.31,10],(10.01+)。
+
+```{r echo=FALSE, Bivariate_Plot17}
+pl.sub$DebtToIncomeRatio.bucket <- cut(pl.sub$DebtToIncomeRatio,
+                                       breaks = c(0,0.13,0.2,0.3,10.01))
+# 创建子集，获取不同的债务与收入比例客户违约率（完成率）
+pl.sub.dtir <- aggregate(pl.sub[,c("DebtToIncomeRatio.bucket","LoanStatus")],
+                         by = list(pl.sub$DebtToIncomeRatio.bucket),
+                         FUN = function(x) mean(as.numeric(x)))
+
+ggplot(aes(x = Group.1, y = 1 - LoanStatus),data = pl.sub.dtir) +
+  geom_col(width = 0.5) +
+  geom_point(size = 3) +
+  geom_line(aes(group = 1),lwd = 1.5)
+```
+
+#### 当债务是收入的20%及以下时，对贷款状态无显著影响（违约率均约27%）；当债务是收入的20%-30%之间时，违约率稍有增加，在30%左右；当债务与收入的比例突破30%后，那么该群体贷款的平均违约率高达37%左右了。
+
+### LoanStatus v.s.IncomeRange
+```{r echo=FALSE, Bivariate_Plot18}
+pl.sub.ir <- pl.sub %>% select(IncomeRange,LoanStatus) %>% 
+  group_by(IncomeRange) %>%
+  summarise(mean = mean(LoanStatus))
+
+ggplot(aes(x = IncomeRange, y = 1 - mean),data = pl.sub.ir) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = paste(round((1 - mean)*100,1),"%")),vjust = 0) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+#### 可以发现未列明工资范围("Not displayed")和无职业无收入("Not employed","$0")的贷款人违约率最高， 分别是40%和39%左右。另外可以发现随着贷款人工资收入的增加，违约率呈梯度降低趋势。这与我们预期的一样，高收入群体的还款能力更好，所以违约率更低。
+  
+# 双变量分析
+
+### 探讨你在这部分探究中观察到的一些关系。这些感兴趣的特性与数据集内其他特性有什么区别？
+该部分双变量分析的核心方向是研究其它特性对贷款状态的影响，具体量化为对违约率的影响，这些特性都可能成为我所感兴趣特性的影响因素。
+其中探讨了如下关系：
+1.利用箱线图和柱状图分别研究了在两种贷款状态下贷款利率（BorrowRate）的数值分布及其对贷款违约率的影响
+2.用spineplot展示了两种贷款状态下不同贷款期限的比例分布，同时通过柱状图研究了贷款期限(Term)  
+  对违约率的影响；
+3.通过柱状图分别研究了2009年7月前后信用等级（CreditGrade,ProsperRating）对贷款违约率的影响；
+4.通过箱线图和柱状图分别研究了2009年9月以后风险评分（ProsperScore）的数值分布及其对贷款违约率的影响；
+5.通过柱状图研究了贷款分类(ListingCategory)对贷款违约率的影响；
+6.通过柱状图研究了贷款人所属州(BorrowerState)对贷款违约率的影响；
+7.通过柱状图研究了贷款人雇佣状态(EmploymentStatus)对贷款违约率的影响；
+8.通过箱线图和散点图（添加趋势线）分别研究了雇佣状态持续时间（EmploymentStatusDuration）的数值分布以
+  及其对贷款违约率的影响；
+9.通过spineplot展示了两种贷款状态下贷款人有房产和没房产(IsBorrowerHomeOwner)各占的比例；
+10.通过箱线图研究了贷款人过去7年贷款信用额度(TotalCreditLinespast7years)的数值分布；
+11.通过箱线图和柱状图分别研究了银行卡透支率(BankcardUtilization)的数值分布及其对贷款违约率的影响；
+12.通过箱线图和柱状图分别研究了银行卡透支率(BankcardUtilization)的数值分布及其对贷款违约率的影响；
+13.通过箱线图和柱状图分别研究了债务与收入比(DebtToIncomeRatio)的数值分布及其对贷款违约率的影响；
+14.通过柱状图研究了贷款人收入范围(IncomeRange)对贷款违约率的影响；
+
+### 你是否观察到主要特性与其他特性之间的有趣关系？
+我所观察到贷款状态与上述特性的有趣关系包括：
+1.LoanStatus v.s. BorrowRate:
+  随着贷款利率增加，违约率逐渐增大；当贷款利率较高时，贷款人更容易处于违约状态。
+2.LoanStatus v.s. Term: 
+  36个月是两个贷款状态最热衷选择的期限，占比均在90%左右；其次是60个月，12个月是最不受欢迎的期限；三种   贷款期限下，12个月违约率最低（约5%），其次是36个月（约31%），60个月违约率最高 （约34%）。
+3.LoanStatus v.s. CreditGrade/ProsperRating: 
+  随着信用等级变差违约率逐渐上涨。但是2009年7月以后各信用等级违约率明显小于2009年7月以前相应等级的违
+  约率，说明Prosper对客户信用等级标准做了有效的调整，从而降低了违约率，这是一个积极的变革。
+4.LoanStatus v.s. ProsperScore:  
+  随着风险评分增加，客户的违约率整体下降，其中评分为1风险最高，违约概率最大，风险评分在2-5时，违约率 
+  变化不明显，从6开始显著降低。
+5.LoanStatus v.s. ListingCategory: 
+  "GreenLoans"违约率最高，接下来依次是"Household Expenses","Medical/Demtal","Business","Personal 
+  Loan","Baby&Adoption",这些贷款类别的违约率均在30%以上；违约率最低的有"RV","Motorcycle","Engagement 
+  Ring”,是唯一违约率在10%以下的三个类别。
+6.LoanStatus v.s. BorrowerState: 
+  ”AL"州违约率最高，达到42%以上，接下来是"MO"（约38%）、"GA"和"ME"(均约37%)、"ID"和"IA"（均约36%），
+  其它州违约率均在35%以下，其中有三个州的客户违约率最低都在20%以下，它们分别是"DC"(约16.5%)、"WY"(约1
+  7%)、"AK"(约19%)。
+7.LoanStatus v.s. EmploymentStatus:
+  贷款人雇佣状态不明确时（如"Notavailable”和"Others"）更容易处于"Defaulted"状态，这两个群体的违约率均   高于42%；而"Employed"和"Part-time"的贷款客户更容易完成还款，违约率相对于其它雇佣状态较低，在25%左右
+8.LoanStatus v.s. EmploymentStatusDuration:
+  由于某种雇佣状态持续时间越长，贷款人数越少，违约率较发散，同时结合实际情况，我们只研究雇佣状态持续
+  20年及以内的情况，发现雇佣状态持续时间对贷款的违约或完成没有显著影响。
+9.LoanStatus v.s. IsBorrowerHomeOwner:
+  "Completed"群体中拥有房产的人的比例略高于"Defaulted"群体，但差距不明显，在5%之内。
+10.LoanStatus v.s. TotalCreditLinespast7years:
+  "Completed"和"Defaulted"群体的TotalCreditLinespast7years数据分布十分相似，所以我们大胆推测  
+  TotalCreditLinespast7years对违约或完成情况没有太大影响。
+11.LoanStatus v.s. BankcardUtilization
+  随着银行卡透支率的增加，违约率随之上升。当贷款人银行卡透支率高于85%时，进入”Defaulted"贷款状态的概
+  率有35%。
+12.LoanStatus v.s. DebtToIncomeRatio
+  当债务是收入的20%及以下时，对贷款状态无显著影响（违约率均约27%）；当债务是收入的20%-30%之间时，违约
+  率稍有增加，在30%左右；当债务与收入的比例突破30%后，那么该群体贷款的平均违约率高达37%左右了。
+13.LoanStatus v.s. IncomeRange
+  未列明工资范围("Not displayed")和无职业无收入("Not employed","$0") 的贷款人违约率最高，分别是40%和   39%左右。随着贷款人收入的增加，违约率呈梯度降低趋势。
+  
+### 你发现最强的关系是什么？
+我发现与贷款状态(违约率)关系最强的是贷款利率（BorrowerRate），同时贷款人的信用等级(ProsperRating..Alpha.)、风险评分(ProsperScore)、雇佣状态(EmploymentStatus)、银行卡透支率(BankcardUtilization)及收入范围(IncomRange)都会影响贷款状态。
+
+
+# 多变量绘图选择
+
+### LoanStatus v.s. BorrowerRate & Term
+```{r echo=FALSE, Multivariate_Plot1}
+p.bt1 <- ggplot(aes(x = Term,y = BorrowerRate),data = pl.sub) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  scale_color_manual(values = c("red","blue")) +
+  theme(legend.position = 'top') +
+  geom_hline(yintercept = c(0.14,0.27),lty = 2)
+
+pl.sub.br_term <- pl.sub %>% 
+  select(BorrowerRate.bucket,Term,LoanStatus) %>%
+  group_by(BorrowerRate.bucket,Term) %>%
+  summarise(default_rate = 1 - mean(LoanStatus))
+
+p.bt2 <- ggplot(aes(x = BorrowerRate.bucket,y = default_rate),
+                data = subset(pl.sub.br_term,!is.na(BorrowerRate.bucket))) +
+ geom_line(aes(group = Term,color = Term)) +
+  geom_point(aes(color = Term),size = 2) +
+  theme(legend.position = 'top')
+
+grid.arrange(p.bt1,p.bt2,ncol = 2)
+```
+
+#### 在所有利率水平中，12个月的贷款期限违约率明显低于36个月和60个月，基本集中在10%以下；当贷款利率处于低谷时（如0-0.14），60个月的平均违约率稍高于36个月（约5%）；当贷款利率处于中间水平时（如0.15-0.27），36个月的平均违约率高于60个月（不超过5%）；当贷款利率处于高峰时（如0.27-0.5），36个月和60个月的平均违约率几乎无差别。
+
+### LoanStatus v.s. BorrowerRate & ProsperRating（After 2009.7）
+```{r echo=FALSE, Multivariate_Plot2}
+p.bpr1 <- ggplot(aes(x = ProsperRating..Alpha.,y = BorrowerRate),
+                 data = pl.post2009) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  scale_color_manual(values = c("red","blue")) +
+  geom_hline(yintercept = c(0.15,0.23,0.3),lty = 2) +
+  theme(legend.position = 'bottom') 
+
+p.bpr2 <- ggplot(aes(x = factor(ProsperRating..Alpha.),y = BorrowerRate,
+                    fill = factor(LoanStatus)),data = pl.post2009) +
+  geom_boxplot() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c("red","blue"))
+
+grid.arrange(p.bpr1,p.bpr2,ncol = 2)
+```
+
+#### 信用等级高的人更容易获得低利率的贷款；对于同一信用等级的贷款人来说，高利率的贷款更容易让其处于违约状态；对于同一利率水平而言，信用等级越差，越容易违约；总而言之，贷款利率越高、信用等级越差，越容易使贷款处于违约状态。
+
+### LoanStatus v.s. BorrowerRate & ProsperScore（After 2009.7）
+```{r echo=FALSE, warning=FALSE, Multivariate_Plot3}
+p.bps1 <- ggplot(aes(x = ProsperScore,y = BorrowerRate),data = pl.post2009) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  scale_color_manual(values = c("red","blue")) +
+  geom_hline(yintercept = c(0.15,0.23,0.3),lty = 2) +
+  theme(legend.position = c(0.1,0.1)) 
+  
+p.bps2 <- ggplot(aes(x = factor(ProsperScore),y = BorrowerRate),
+                 data = pl.post2009) +
+  geom_boxplot(aes(fill = factor(LoanStatus))) +
+  scale_fill_manual(values = c("red","blue")) +
+  theme(legend.position = c(0.1,0.1)) 
+
+grid.arrange(p.bps1,p.bps2,ncol = 2)
+```
+
+#### 风险评分高的人更容易获得低利率的贷款；对于同一风险评分的贷款人来说，高利率的贷款更容易让其处于违约状态；对于同一利率水平而言，风险评分越小，越容易违约；总而言之，贷款利率越高、风险评分越小，越容易使贷款处于违约状态。
+
+### LoanStatus v.s. ProsperRating & ProsperScore（after 2009.7）
+```{r echo=FALSE, warning=FALSE, Multivariate_Plot4}
+pl.sub.pr_ps <- pl.post2009 %>% 
+  select(ProsperRating..Alpha.,ProsperScore,LoanStatus) %>%
+  group_by(ProsperRating..Alpha.,ProsperScore) %>%
+  summarise(default_rate = 1 - mean(LoanStatus))
+  
+ggplot(aes(x = ProsperRating..Alpha.,y = ProsperScore,
+           fill = default_rate),data = pl.sub.pr_ps) +
+  geom_tile() +
+  scale_fill_distiller() +
+  scale_y_continuous(breaks = seq(0,12,1))
+```
+
+#### 从上图展示的不同的信用等级和风险评分所对应的平均违约率分布图可以发现，信用等级或风险评分较高的违约率小，信用等级和风险评分都居中的违约率较大，信用等级和风险评分都较低的违约率最大。
+
+### LoanStatus v.s. BorrowerRate & EmploymentStatus
+```{r echo=FALSE, Multivariate_Plot5}
+pl.sub.br_es <- pl.sub %>% 
+  select(BorrowerRate.bucket,EmploymentStatus,LoanStatus) %>%
+  group_by(BorrowerRate.bucket,EmploymentStatus) %>%
+  summarise(default_rate = 1 - mean(LoanStatus)) 
+
+p.bes1 <- ggplot(aes(x = EmploymentStatus , y = default_rate),
+       data = subset(pl.sub.br_es,!is.na(BorrowerRate.bucket))) +
+  geom_line(aes(group = BorrowerRate.bucket,color = BorrowerRate.bucket),
+            lwd = 2) +
+  geom_point(aes(color = BorrowerRate.bucket),size = 3) +
+  theme(axis.text.x = element_text(angle = 30)) +
+  scale_color_brewer()
+
+p.bes2 <- ggplot(aes(x = EmploymentStatus , y = default_rate),
+       data = subset(pl.sub.br_es,!is.na(BorrowerRate.bucket))) +
+  geom_col(aes(fill = BorrowerRate.bucket),
+           position = position_dodge(0.9)) +
+  theme_dark() +
+  theme(legend.position = "bottom") +
+  scale_fill_brewer()
+
+grid.arrange(p.bes1,p.bes2, ncol = 1)
+```
+
+#### 不论处于什么利率水平，雇佣状态为"Employed"和"Part-time"的违约率相对于其它状态来说较小；当处于低利率水平时（例如小于0.2），个体（"Self-employed"）的违约率较高,而当处于高利率水平时（例如大于0.2），未列明雇佣状态的群体（"Not available"）的违约率显著高于其它群体。
+
+### LoanStatus v.s. BorrowerRate & IncomeRange
+```{r echo=FALSE, Multivariate_Plot6}
+p.bir1 <- ggplot(aes(x = IncomeRange,y = BorrowerRate),data = pl.sub) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  scale_color_manual(values = c("red","blue")) +
+  geom_hline(yintercept = c(0.14,0.27),lty = 2) +
+  theme(legend.position = "top",
+        axis.text.x = element_text(angle = 30,hjust = 1)) 
+
+pl.sub.br_ir <- pl.sub %>% 
+  select(BorrowerRate.bucket,IncomeRange,LoanStatus) %>%
+  group_by(BorrowerRate.bucket,IncomeRange) %>%
+  summarise(default_rate = 1 - mean(LoanStatus)) 
+
+p.bir2 <- ggplot(aes(x = IncomeRange,y = default_rate),
+       data = subset(pl.sub.br_ir,!is.na(BorrowerRate.bucket))) +
+  geom_point(aes(color = BorrowerRate.bucket),size = 3) +
+  geom_line(aes(group = BorrowerRate.bucket,color = BorrowerRate.bucket),
+            lwd = 2) +
+  theme_dark() +
+  theme(axis.text.x = element_text(angle = 30,hjust = 1)) +
+  scale_color_brewer()
+  
+grid.arrange(p.bir1,p.bir2,ncol = 1)
+```
+
+#### 随着收入范围的增加和利率的降低，违约率逐渐降低。反之，收入越少、利率越高，那么贷款更容易处于"Defaulted"状态。
+
+### LoanStatus v.s. BorrowerRate & BankcardUtilization
+```{r echo=FALSE,warning=FALSE,Multivariate_Plot7}
+p.bbu1 <- ggplot(aes(x = BankcardUtilization, y = BorrowerRate),data = pl.sub) +
+  geom_jitter(aes(color = factor(LoanStatus)),shape = 20,alpha = 1/3,size = 3) +
+  xlim(0,2) +
+  ylim(0,0.4) +
+  scale_color_manual(values = c("red","blue")) +
+  theme(legend.position = "top") 
+  
+p.bbu2 <- ggplot(aes(x = BorrowerRate.bucket, y = BankcardUtilization),
+       data = subset(pl.sub,!is.na(BorrowerRate.bucket))) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  scale_color_manual(values = c("red","blue")) +
+  theme(legend.position = "top") +
+  ylim(0,2) +
+  geom_hline(yintercept = c(0.21,0.56,0.85),lty = 2) 
+
+pl.sub.br_bu <- pl.sub %>% 
+  select(BorrowerRate.bucket,BankcardUtilization.bucket,LoanStatus) %>%
+  group_by(BorrowerRate.bucket,BankcardUtilization.bucket) %>%
+  summarise(default_rate = 1 - mean(LoanStatus)) 
+
+p.bbu3 <- ggplot(aes(x = BorrowerRate.bucket,y = default_rate),
+       data = subset(pl.sub.br_bu,!is.na(BorrowerRate.bucket) & 
+                       !is.na(BankcardUtilization.bucket))) +
+  geom_col(aes(fill = BankcardUtilization.bucket),position = position_dodge()) +
+  scale_fill_brewer(type = "seq") +
+  theme_dark()
+
+grid.arrange(p.bbu1,p.bbu2,p.bbu3,ncol = 1)
+```
+
+#### 总体趋势是贷款利率越高、银行卡透支率越高，那么贷款违约率就越大；在低利率区间0-0.14，随着银行卡透支率的增加，平均违约率逐渐上升；但在其它利率区间，低透支率反而拥有相对较高的平均违约率。
+
+
+#  尝试建立线性模型
+```{r echo=FALSE, Linear_Model}
+m1 <- lm(LoanStatus ~ BorrowerRate,data = pl.post2009)
+m2 <- update(m1, ~ . + ProsperRating..Alpha.)
+m3 <- update(m2, ~ . + ProsperScore)
+m4 <- update(m3, ~ . + EmploymentStatus)
+m5 <- update(m4, ~ . + IncomeRange)
+m6 <- update(m5, ~ . + BankcardUtilization) 
+m7 <- update(m6, ~ . + Term) 
+
+summary(m7)
+```
+
+#### 从上述线性拟合结果来看，影响贷款状态的因素中，有10.5%的因素来自上述因素。因为数据集涉及到的变量众多，都有可能影响到贷款的最终状态，而我们研究的变量有限，加之线性拟合的局限性，所以本结果不是一次成功的拟合。
+
+
+# 多变量分析
+
+### 探讨你在这部分探究中观察到的一些关系。通过观察感兴趣的特性，是否存在相互促进的特性？
+在双变量探索中发现了最强的关系是贷款状态与贷款利率，以此为主线，加入其它变量进行多变量探索分析，我研究了如下的关系：
+1.LoanStatus v.s. BorrowerRate & Term
+在所有利率水平中，12个月的贷款期限违约率明显低于36个月和60个月，基本集中在10%以下；当贷款利率处于低谷时（如0-0.14），60个月的平均违约率稍高于36个月（约5%）；当贷款利率处于中间水平时（如0.15-0.27），36个月的平均违约率高于60个月（不超过5%）；当贷款利率处于高峰时（如0.27-0.5），36个月和60个月的平均违约率几乎无差别。
+
+2.LoanStatus v.s. BorrowerRate & ProsperRating（这里只研究 2009.7以后）
+发现信用等级高的人更容易获得低利率的贷款；贷款利率越高、信用等级越差，越容易使贷款处于违约状态。
+
+3.LoanStatus v.s. BorrowerRate & ProsperScore（after 2009.7）
+信用等级或风险评分较高的违约率较小，信用等级和风险评分都居中的违约率较大，信用等级和风险评分都较低的违约率最大。
+
+4.LoanStatus v.s. BorrowerRate & EmploymentStatus
+不论处于什么利率水平，雇佣状态为"Employed"和"Part-time"的违约率相对于其它状态来说较小；当处于低利率水平时（例如小于0.2），个体（"Self-employed"）的违约率较高,而当处于高利率水平时（例如大于0.2），未列明雇佣状态的群体（"Not available"）的违约率显著高于其它群体。
+
+5.LoanStatus v.s. BorrowerRate & IncomeRange
+随着收入范围的增加和利率的降低，违约率逐渐降低。反之，收入越少、利率越高，那么贷款更容易处于"Defaulted"状态。
+
+6.LoanStatus v.s. BorrowerRate & BankcardUtilization
+总体趋势是贷款利率越高、银行卡透支率越高，那么贷款违约率就越大；在低利率区间0-0.14，随着银行卡透支率的增加，平均违约率逐渐上升；但在其它利率区间，低透支率反而拥有相对较高的平均违约率。
+
+相互促进的特性有：
+1.贷款利率和信用等级；
+2.贷款利率和风险评分；
+3.信用等级和风险评分；
+4.贷款利率和收入范围。
+
+### 这些特性之间是否存在有趣或惊人的联系呢？
+1.贷款利率和信用等级（信用等级越高，贷款利率越低，违约概率越低）；
+2.贷款利率和风险评分（风险评分越高，贷款利率越小，违约概率越低）；
+3.信用等级和风险评分（信用等级越高，风险评分越高，违约概率越低）；
+4.贷款利率和收入范围（收入范围越大，贷款利率越小，违约概率越低）。
+
+### 选项：你是否创建过数据集的任何模型？讨论你模型的优缺点。
+尝试过。从线性拟合结果来看，影响贷款状态的因素中，有10.5%的因素来自拟合时的变量。因为数据集涉及到的变量众多，都有可能影响到贷款的最终状态，而我们研究的变量有限，加之线性拟合的局限性，所以本结果不是一次成功的拟合。
+
+
+# 定稿图与总结
+
+### 绘图一
+```{r echo=FALSE, Plot_One}
+# 绘制LoanOriginationDate直方图
+ggplot(aes(x = LoanOriginationDate), data = pl.sub) +
+  geom_histogram(bins = 100) +
+  ggtitle("Loan Origination Date Distribution") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  xlab("Loan Origination Date") +
+  ylab("Number of Loans") 
+```
+
+### 描述一
+由直方图可知，2008.11-2009.6间几乎没有网络贷款记录（期间只有2009.5有少量记录），可能是金融危机所致，我们需要关注Prosper在这个空白时间段前后业务上有什么变化。
+
+### 绘图二
+```{r echo=FALSE, Plot_Two}
+# 箱线图
+p.br1 <- ggplot(aes(x = factor(LoanStatus),y = BorrowerRate), data = pl.sub) +
+  geom_boxplot(fill = "light blue",lwd = 1) +
+  ggtitle("Loan Status by Borrower Rate") +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.background = element_rect(fill = "grey70",color = "black"),
+        panel.grid.major = element_line(colour = "grey50"),
+        panel.grid.minor = element_line(colour = "grey50"),
+        plot.background = element_rect(fill = "grey50", color = "black")) +
+  xlab("Loan Status (0 : Defaulted; 1: Completed)") +
+  ylab("Borrower Rate") 
+# 将BorrowerRate分成5个区间
+#pl.sub$BorrowerRate.bucket <- cut(pl.sub$BorrowerRate,breaks = c(0,0.14,0.19,0.27,0.5))
+# 创建子集，获取每个贷款利率段平均违约率情况
+#pl.sub.br <- aggregate(pl.sub[,c("BorrowerRate","LoanStatus")],by = list(pl.sub$BorrowerRate.bucket),mean) 
+
+p.br2 <- ggplot(aes(x = Group.1,y = 1 - LoanStatus),data = pl.sub.br) +
+  geom_col(width = 0.6,fill = "light blue",color = 'black') +
+  geom_text(aes(label = paste0(round((1 - LoanStatus)*100,1),"%")),
+            vjust = 0,size = 5) +
+  ggtitle("Average Default Rate by Borrower Rate Bucket") +
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.background = element_rect(fill = "grey70",color = "black"),
+        panel.grid.major = element_line(colour = "grey50"),
+        panel.grid.minor = element_line(colour = "grey50"),
+        plot.background = element_rect(fill = "grey50", color = "black")) +
+  xlab("Borrower Rate Bucket") +
+  ylab("Average Default Rate")
+
+grid.arrange(p.br1,p.br2,ncol = 1)
+```
+
+### 描述二
+'Defaulted'状态的贷款利率中位数明显大于 'Completed'状态，随着贷款利率增加，平均违约率逐渐增大。
+
+### 绘图三
+```{r echo=FALSE, Plot_Three}
+p.bir1 <- ggplot(aes(x = IncomeRange,y = BorrowerRate),data = pl.sub) +
+  geom_jitter(aes(color = factor(LoanStatus)),alpha = 1/3) +
+  geom_hline(yintercept = c(0.14,0.27),lty = 2,color = "white") +
+  ggtitle("Loan Status by Borrower Rate and IncomeRange") +
+  theme(panel.background = element_rect(fill = "#333333"),
+        panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        legend.position = "top",
+        legend.background = element_rect(fill = "#CCCCCC"),
+        legend.title = element_text(size = 9),
+        axis.text.x = element_text(angle = 30,vjust = 0.5),
+        plot.background = element_rect(fill = "#CCCCCC",color = "black")) +
+  scale_color_manual(values = c("red","blue"),
+                     name = "Loan Status",
+                     breaks = c(0,1),
+                     labels = c("Defaulted","Completed")) 
+ 
+
+#pl.sub.br_ir <- pl.sub %>% select(BorrowerRate.bucket,IncomeRange,LoanStatus) %>%
+  #group_by(BorrowerRate.bucket,IncomeRange) %>%
+  #summarise(default_rate = 1 - mean(LoanStatus)) 
+
+p.bir2 <- ggplot(aes(x = IncomeRange,y = default_rate),
+       data = subset(pl.sub.br_ir,!is.na(BorrowerRate.bucket))) +
+  geom_point(aes(color = BorrowerRate.bucket),size = 3) +
+  geom_line(aes(group = BorrowerRate.bucket,color = BorrowerRate.bucket),
+            lwd = 2) +
+  ggtitle("Average Default Rate by Borrow Rate and IncomeRange") +
+  ylab("Average Default Rate") +
+  theme_dark() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.background = element_rect(fill = "#CCCCCC",color = "black"),
+        legend.position = "top",
+        legend.title = element_text(size = 9),
+        legend.text = element_text(size = 7),
+        legend.background = element_rect(fill = "#CCCCCC"),
+        axis.text.x = element_text(angle = 30, vjust = 0.5)) +
+  scale_color_brewer(name = "Borrower Rate Bucket") 
+  
+  
+grid.arrange(p.bir1,p.bir2,ncol = 1)
+```
+
+### 描述三
+同等利率条件下，随着收入范围的增加（从$0-$100,000+），"Defaulted"状态的贷款所占的比例逐渐有所下降（散点图蓝色点密度下降），同时各个收入范围所对应的平均违约率逐渐下降；可以发现在已列明收入范围的贷款中，利率越低、收入越高，则违约概率越小；反之，收入越少、利率越高，那么贷款更容易处于"Defaulted"状态。
+
+
+# 反思
+    Prosper 贷款数据集包括了2005-11到2014-03期间113,937 项贷款，每项贷款有 81 个变量。我首先通过变量字典了解各个变量所代表的具体含义，然后在进一步熟悉金融贷款常识的基础上，寻找并确定自己感兴趣的问题，那就是探索哪些因素会影响借贷状态（这里主要指"Defaulted"和"Completed"两种状态），我从中选择了自认为重要的16个变量，研究这些变量对贷款状态（LoanStatus）的影响。由于知识面和时间有限，16个变量的选择和分析不可避免有失完整性及合理性，所以所得结论仅用于此项目。
+    所选取的变量包括三个层面，借贷人员的人身特性，例如就业状态及时长（EmploymentStatus/EmploymentStatusDuration），债务与收入比例（DebtToIncomeRatio），收入范围（IncomeRange），是否有房子（IsBorrowerHomeowner），居住在哪个州（BorrowerState）等，其次是借贷人的行为特性，比如信用等级及风险评分（CreditGrade/ProsperRating/ProsperScore），借贷原因（ListingCategory），过去7年信用额度情况（TotalCreditLinespast7years），银行卡使用情况（BankcardUtilization）等，最后是一些贷款特性，例如贷款期限（Term），贷款利率（BorrowerRate），我认为上述提及的变量都可以帮助我探索前面提到的问题。
+    通过单变量和双变量阶段的分析，我发现与贷款状态(违约率)关系最强的是贷款利率（BorrowerRate），贷款利率越高，那么该笔贷款违约的概率就越大，这也符合我们的常识。所以多变量分析阶段，在贷款状态和利率两个变量的基础上，同时结合其它关系较强的影响贷款状态（违约率）的变量进行了进一步探索，这些变量包括贷款人的信用等级(ProsperRating..Alpha.)、风险评分(ProsperScore)、收入范围(IncomRange)、雇佣状态(EmploymentStatus)、银行卡透支率(BankcardUtilization)及贷款期限（Term）。结果表明信用等级和风险评分高的更容易获得低利率的贷款，从而更容易使贷款处于"Completed"状态；在列明收入范围的贷款中，利率越高，收入越低，贷款违约率降高，反之贷款违约率变低。遗憾的是，贷款期限、雇佣状态以及银行卡透支率并没有随着利率水平的变化而出现有规律的变化，它们的变化趋势依赖于不同的利率水平区间。
+    最后我尝试过建立线性模型。从线性拟合结果来看，影响贷款状态的因素中，有10.5%的因素来自拟合时的变量。因为数据集涉及到的变量众多，都有可能影响到贷款的最终状态，而我们研究的变量有限，加之线性拟合的局限性，所以本结果不是一次成功的拟合，今后还需要学习其它建模方法后进一步优化结果。未来应多进行逻辑思维训练，提升分析能力，从对不同类型数据的理解和处理入手，通过创建有效的分析图形，充分探索数据集。
